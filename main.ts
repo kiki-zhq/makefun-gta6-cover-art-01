@@ -12,13 +12,45 @@
 // Outside the grader's container, MAKEFUN_OUTPUT_DIR stands in for /output:
 //   mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts
 
-import { cpSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildDossier } from './vendor/makefun-app.ts';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
 const out = process.env.MAKEFUN_OUTPUT_DIR ?? '/output';
+
+// Fail fast when the screenshots break the gate's limits, instead of handing
+// in an entry the scorer would refuse: 3 or 4 images, each at most 256 KiB,
+// each a whole PNG or JPEG (checked by its magic bytes).
+const shotDir = join(here, 'screenshots');
+const shotNames = existsSync(shotDir)
+  ? readdirSync(shotDir).filter((n) => !n.startsWith('.'))
+  : [];
+if (shotNames.length < 3 || shotNames.length > 4) {
+  throw new Error(`screenshots/: expected 3 or 4 images, found ${shotNames.length}`);
+}
+for (const name of shotNames) {
+  const shotPath = join(shotDir, name);
+  const size = statSync(shotPath).size;
+  if (size > 262144) {
+    throw new Error(`screenshots/${name} is ${size} bytes, over the 256 KiB cap`);
+  }
+}
+
+// The app itself must also fit the gate: at most 993 files and 48 MiB in all.
+let appFiles = 0;
+let appBytes = 0;
+(function countApp(dir) {
+  for (const name of readdirSync(dir)) {
+    const p = join(dir, name);
+    const st = statSync(p);
+    if (st.isDirectory()) countApp(p);
+    else { appFiles += 1; appBytes += st.size; }
+  }
+})(join(here, 'app'));
+if (appFiles > 993) throw new Error(`app/: ${appFiles} files, over the 993-file cap`);
+if (appBytes > 50331648) throw new Error(`app/: ${appBytes} bytes, over the 48 MiB cap`);
 
 mkdirSync(out, { recursive: true });
 cpSync(join(here, 'app'), join(out, 'app'), { recursive: true });
@@ -38,4 +70,15 @@ writeFileSync(
     app_max_bytes: 50331648,
     app_path_max_bytes: 1000,
   }),
+);
+
+// Read the dossier back and confirm it is valid JSON within its cap, so a
+// broken build fails here instead of at the gate.
+const dossierPath = join(out, 'dossier.json');
+const dossierBytes = statSync(dossierPath).size;
+if (dossierBytes > 1572864) throw new Error(`dossier.json is ${dossierBytes} bytes, over the 1.5 MiB cap`);
+JSON.parse(readFileSync(dossierPath, 'utf8'));
+console.log(
+  `Vice Cover Studio: ${shotNames.length} screenshots, app/ ${appFiles} files / ${appBytes} bytes, ` +
+  `dossier.json ${dossierBytes} bytes — validation passed`,
 );
