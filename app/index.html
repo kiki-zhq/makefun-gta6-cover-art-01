@@ -58,7 +58,7 @@
           <span class="layout-diagram strip-diagram"><i></i><i></i></span> Full-bleed + strip</label>
       </div>
       <div id="panel-controls"></div>
-      <p class="hint">Tip: drag a panel on the preview to move its photo. Click a panel to edit it here.</p>
+      <p class="hint">Tip: drag a panel on the preview to move its photo. Click a panel to edit it here. With a panel selected, the arrow keys nudge its photo.</p>
     </section>
 
     <section class="step" id="step-caption">
@@ -107,7 +107,7 @@
   </aside>
 
   <section class="preview" aria-label="Live cover preview">
-    <canvas id="cover" width="1080" height="1080" aria-label="The cover preview"></canvas>
+    <canvas id="cover" width="1080" height="1080" tabindex="0" aria-label="The cover preview. Use the arrow keys to nudge the selected panel's photo."></canvas>
     <p class="preview-note" id="preview-note">Live preview — every change redraws the cover.</p>
   </section>
 </main>

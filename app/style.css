@@ -81,6 +81,7 @@ html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--te
 #cover { width: min(72vh, 100%); max-width: 640px; height: auto; aspect-ratio: auto;
   border-radius: 6px; box-shadow: 0 12px 44px rgba(0, 0, 0, .55), 0 0 0 1px var(--line);
   cursor: grab; touch-action: none; }
+#cover:focus-visible { outline: 2px solid var(--cyan); outline-offset: 3px; }
 #cover.dragging { cursor: grabbing; }
 .preview-note { margin: 0; color: var(--muted); font-size: 13px; }
 /* Screenshot scenes: the cover alone fills the window; the editor keeps its layout. */
