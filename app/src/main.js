@@ -1,7 +1,8 @@
 // Vice Cover Studio — wires the editor: photo slots, layout and panel controls,
-// caption and grade, drag-to-pan on the preview, and PNG export at three sizes.
-// A `?shot=` query sets up a fixed scene for a screenshot instead (./shots.js).
-import { drawCover, LAYOUTS, panelAt, panelRects } from './cover.js';
+// caption and grade, drag-to-pan on the preview, keyboard nudging, and PNG export
+// at three sizes. A `?shot=` query sets up a fixed scene for a screenshot instead
+// (./shots.js).
+import { drawCover, LAYOUTS, panelAt, panelRects, clampAssignment, nudgeAssignment, exportFileName } from './cover.js';
 import { runShot } from './shots.js';
 
 const canvas = document.getElementById('cover');
@@ -129,6 +130,7 @@ function buildPanelControls() {
         const kind = el.dataset.kind;
         if (kind === 'photo') a.photo = Number(el.value);
         else a[kind] = Number(el.value);
+        clampAssignment(a);
         state.selectedPanel = i;
         redraw();
       });
@@ -206,6 +208,25 @@ canvas.addEventListener('pointerup', () => {
   canvas.classList.remove('dragging');
 });
 
+// ---- Keyboard: arrow keys nudge the selected panel's photo ----
+
+canvas.addEventListener('keydown', (e) => {
+  if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) return;
+  if (state.selectedPanel < 0) return;
+  e.preventDefault();
+  const step = e.shiftKey ? 0.08 : 0.02;
+  const dx = e.key === 'ArrowLeft' ? -step : e.key === 'ArrowRight' ? step : 0;
+  const dy = e.key === 'ArrowUp' ? -step : e.key === 'ArrowDown' ? step : 0;
+  const a = state.assignments[state.layout][state.selectedPanel];
+  nudgeAssignment(a, dx, dy);
+  const box = panelControls.querySelector(`[data-panel="${state.selectedPanel}"]`);
+  if (box) {
+    box.querySelector('[data-kind="ox"]').value = String(a.ox);
+    box.querySelector('[data-kind="oy"]').value = String(a.oy);
+  }
+  redraw();
+});
+
 // ---- Export ----
 
 /** Renders the cover at a chosen size and downloads it as a PNG. */
@@ -221,12 +242,13 @@ export function exportCover(sizeText) {
       status.textContent = 'Export failed — the browser could not make the PNG.';
       return;
     }
+    const fileName = exportFileName(state.title, w, h);
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = `vice-cover-${w}x${h}.png`;
+    a.download = fileName;
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-    status.textContent = `Saved vice-cover-${w}x${h}.png`;
+    status.textContent = `Saved ${fileName}`;
   }, 'image/png');
 }
 document.querySelectorAll('.export-btn').forEach((btn) => {

@@ -29,6 +29,10 @@ export async function runShot(shot, query, api) {
   await api.loadSample(0, query.get('photo') ?? 'pier');
   await api.loadSample(1, query.get('photo2') ?? 'boulevard');
   api.redraw();
+  // Mark the canvas with the scene name so a screenshot can tell which it is,
+  // then wait two animation frames: the first lets the canvas paint, the second
+  // lets the grade wash and caption settle before the capture.
+  canvas.dataset.shot = shot;
   requestAnimationFrame(() => requestAnimationFrame(() => {
     window.__shotReady = true;
     document.body.dataset.shotReady = '1';

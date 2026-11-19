@@ -43,6 +43,30 @@ export const GRADES = {
 
 export const PANEL_GAP = 0.008; // gap between panels, as a fraction of the cover width
 
+/** The ranges a panel assignment may take: zoom 1–2.5, pan offsets within ±0.5. */
+export const ASSIGNMENT_LIMITS = { zoomMin: 1, zoomMax: 2.5, panMax: 0.5 };
+
+/** Clamps an assignment's zoom and pan into their ranges, in place, and returns it. */
+export function clampAssignment(a) {
+  a.zoom = Math.max(ASSIGNMENT_LIMITS.zoomMin, Math.min(ASSIGNMENT_LIMITS.zoomMax, a.zoom || 1));
+  a.ox = Math.max(-ASSIGNMENT_LIMITS.panMax, Math.min(ASSIGNMENT_LIMITS.panMax, a.ox || 0));
+  a.oy = Math.max(-ASSIGNMENT_LIMITS.panMax, Math.min(ASSIGNMENT_LIMITS.panMax, a.oy || 0));
+  return a;
+}
+
+/** Moves a panel's photo by (dx, dy) in panel fractions, keeping it in range. */
+export function nudgeAssignment(a, dx, dy) {
+  a.ox = (a.ox || 0) + dx;
+  a.oy = (a.oy || 0) + dy;
+  return clampAssignment(a);
+}
+
+/** Builds a tidy download name from the cover title and export size. */
+export function exportFileName(title, w, h) {
+  const slug = title.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'cover';
+  return `vice-cover-${slug}-${w}x${h}.png`;
+}
+
 /** Panel rectangles in pixels for a layout on a cover of width w and height h. */
 export function panelRects(layoutId, w, h) {
   return LAYOUTS[layoutId].map((p) => ({
@@ -177,7 +201,7 @@ export function drawCover(canvas, state) {
   ctx.fillStyle = grade.dark;
   ctx.fillRect(0, 0, w, h);
   rects.forEach((rect, i) => {
-    const a = panels[i] ?? { photo: 0, zoom: 1, ox: 0, oy: 0 };
+    const a = clampAssignment(panels[i] ?? { photo: 0, zoom: 1, ox: 0, oy: 0 });
     const img = state.photos[a.photo] ?? null;
     if (img) drawPanelPhoto(ctx, img, rect, a.zoom, a.ox, a.oy);
     else drawEmptyPanel(ctx, rect, grade, 'ADD A PHOTO');
