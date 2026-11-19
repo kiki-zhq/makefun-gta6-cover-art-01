@@ -1,40 +1,40 @@
-// Fixed scenes for screenshots. `?shot=cover` shows the cover alone, full-window;
-// `?shot=editor` shows the editor with photos loaded. Query parameters:
-//   photo   — the sample for photo slot 1 (boulevard or pier, default pier)
-//   photo2  — the sample for photo slot 2 (default boulevard)
-//   caption — the title words (default "Sunset Heist")
-//   layout  — hero, grid or strip (default hero)
-//   grade   — sunset, neon or gold (default sunset)
-//   size    — square, portrait or wide; sets the preview canvas (default square)
-// window.__shotReady is set once the scene is painted.
-export async function runShot(shot, query, api) {
-  if (shot === 'cover') document.body.classList.add('shot-cover');
-  const layout = query.get('layout') ?? 'hero';
-  const grade = query.get('grade') ?? 'sunset';
-  const size = query.get('size') ?? 'square';
-  const sizes = { square: [1080, 1080], portrait: [1080, 1350], wide: [1920, 1080] };
-  const [w, h] = sizes[size] ?? sizes.square;
-  const canvas = document.getElementById('cover');
-  canvas.width = w;
-  canvas.height = h;
-  api.setState({
-    layout,
-    grade,
-    title: query.get('caption') ?? 'Sunset Heist',
-    subtitle: query.get('subtitle') ?? 'One last job under the neon',
-    titleColor: query.get('color') ?? '#ffffff',
-    captionPos: query.get('pos') ?? 'bottom',
-    selectedPanel: -1,
-  });
-  await api.loadSample(0, query.get('photo') ?? 'pier');
-  await api.loadSample(1, query.get('photo2') ?? 'boulevard');
-  api.redraw();
-  // Mark the canvas with the scene name so a screenshot can tell which it is,
-  // then wait two animation frames: the first lets the canvas paint, the second
-  // lets the grade wash and caption settle before the capture.
-  canvas.dataset.shot = shot;
-  requestAnimationFrame(() => requestAnimationFrame(() => {
-    window.__shotReady = true;
-    document.body.dataset.shotReady = '1';
-  }));
+// Vice Cover Studio — screenshot scenes (?shot=cover / ?shot=editor).
+// Reads the query, boots the app into the scene, and marks window.__shotReady
+// once the view has fully rendered, so screenshots capture the finished frame.
+import { boot } from './main.js';
+
+function readScene() {
+  const q = new URLSearchParams(window.location.search);
+  const shot = q.get('shot') || 'editor';
+  const photo = q.get('photo') || 'pier';
+  const caption = q.get('caption') || '';
+  const size = q.get('size') || 'square';
+  const grade = q.get('grade') || '';
+  const layout = q.get('layout') || '';
+  return { shot, photo, caption, size, grade, layout };
+}
+
+async function runScene() {
+  const scene = readScene();
+  try {
+    await boot({
+      scene: scene.shot === 'cover' ? 'cover' : 'editor',
+      photo: scene.photo,
+      caption: scene.caption || undefined,
+      size: scene.size,
+      grade: scene.grade || undefined,
+      layout: scene.layout || undefined,
+    });
+  } catch (err) {
+    console.warn('scene boot failed', err);
+  }
+  // Let fonts, images and the canvas settle, then signal readiness.
+  await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  window.__shotReady = true;
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', runScene);
+} else {
+  runScene();
 }

@@ -1,238 +1,225 @@
-// Vice Cover Studio — the cover drawing engine.
-// A cover is a set of photo panels in a chosen layout, a colour grade washed over
-// the whole sheet, and bold poster lettering. Everything is drawn on a 2D canvas
-// at the export size, so the live preview and the exported PNG are the same drawing.
+// Vice Cover Studio — cover drawing engine (no DOM state, only canvas + a state object).
+// A state is: { layout, grade, title, subtitle, photos: [HTMLImageElement], panels: [{photo, zoom, x, y}] }
 
-// Panel rectangles are fractions of the cover: [x, y, width, height].
 export const LAYOUTS = {
-  // Big hero photo on the left, two stacked panels on the right.
-  hero: [
-    { name: 'Hero', rect: [0, 0, 0.62, 1] },
-    { name: 'Top right', rect: [0.62, 0, 0.38, 0.5] },
-    { name: 'Bottom right', rect: [0.62, 0.5, 0.38, 0.5] },
-  ],
-  // Four equal panels in a grid.
-  grid: [
-    { name: 'Top left', rect: [0, 0, 0.5, 0.5] },
-    { name: 'Top right', rect: [0.5, 0, 0.5, 0.5] },
-    { name: 'Bottom left', rect: [0, 0.5, 0.5, 0.5] },
-    { name: 'Bottom right', rect: [0.5, 0.5, 0.5, 0.5] },
-  ],
-  // One photo fills the sheet; a narrow side strip holds a second photo.
-  strip: [
-    { name: 'Main', rect: [0, 0, 0.84, 1] },
-    { name: 'Side strip', rect: [0.84, 0, 0.16, 1] },
-  ],
+  hero: {
+    label: 'Hero + 2',
+    slots: [
+      { x: 0, y: 0, w: 0.62, h: 1 },
+      { x: 0.62, y: 0, w: 0.38, h: 0.5 },
+      { x: 0.62, y: 0.5, w: 0.38, h: 0.5 },
+    ],
+  },
+  grid: {
+    label: '4-panel grid',
+    slots: [
+      { x: 0, y: 0, w: 0.5, h: 0.5 },
+      { x: 0.5, y: 0, w: 0.5, h: 0.5 },
+      { x: 0, y: 0.5, w: 0.5, h: 0.5 },
+      { x: 0.5, y: 0.5, w: 0.5, h: 0.5 },
+    ],
+  },
+  bleed: {
+    label: 'Full-bleed',
+    slots: [
+      { x: 0, y: 0, w: 1, h: 1 },
+      { x: 0.72, y: 0.08, w: 0.24, h: 0.52 },
+    ],
+  },
 };
 
-// Each grade is a wash of colour over the panels plus the border and accent colours.
 export const GRADES = {
   sunset: {
-    top: 'rgba(255, 110, 60, 0.10)', bottom: 'rgba(220, 40, 130, 0.55)',
-    border: '#ffd166', accent: '#ff5e8a', dark: '#2b1030',
+    label: 'Vice Sunset',
+    stops: ['rgba(255,122,24,0.55)', 'rgba(255,46,136,0.45)', 'rgba(122,31,162,0.5)'],
+    blend: 'overlay',
+    caption: '#fff3d6',
+    captionEdge: '#c2255c',
+    band: 'rgba(20,4,24,0.72)',
   },
   neon: {
-    top: 'rgba(0, 229, 255, 0.10)', bottom: 'rgba(190, 20, 220, 0.55)',
-    border: '#00e5ff', accent: '#ff5e8a', dark: '#0d0a2e',
+    label: 'Neon Night',
+    stops: ['rgba(46,230,255,0.5)', 'rgba(255,46,136,0.4)', 'rgba(20,10,60,0.55)'],
+    blend: 'screen',
+    caption: '#8ef6ff',
+    captionEdge: '#ff2e88',
+    band: 'rgba(4,10,34,0.78)',
   },
   gold: {
-    top: 'rgba(255, 200, 80, 0.12)', bottom: 'rgba(180, 90, 10, 0.52)',
-    border: '#ffcf5c', accent: '#ff8a3c', dark: '#2a1a08',
+    label: 'Gold Hour',
+    stops: ['rgba(255,196,77,0.55)', 'rgba(255,140,40,0.4)', 'rgba(90,40,0,0.45)'],
+    blend: 'soft-light',
+    caption: '#ffe9a8',
+    captionEdge: '#7a4d00',
+    band: 'rgba(26,16,2,0.74)',
   },
 };
 
-export const PANEL_GAP = 0.008; // gap between panels, as a fraction of the cover width
-
-/** The ranges a panel assignment may take: zoom 1–2.5, pan offsets within ±0.5. */
-export const ASSIGNMENT_LIMITS = { zoomMin: 1, zoomMax: 2.5, panMax: 0.5 };
-
-/** Clamps an assignment's zoom and pan into their ranges, in place, and returns it. */
-export function clampAssignment(a) {
-  a.zoom = Math.max(ASSIGNMENT_LIMITS.zoomMin, Math.min(ASSIGNMENT_LIMITS.zoomMax, a.zoom || 1));
-  a.ox = Math.max(-ASSIGNMENT_LIMITS.panMax, Math.min(ASSIGNMENT_LIMITS.panMax, a.ox || 0));
-  a.oy = Math.max(-ASSIGNMENT_LIMITS.panMax, Math.min(ASSIGNMENT_LIMITS.panMax, a.oy || 0));
-  return a;
-}
-
-/** Moves a panel's photo by (dx, dy) in panel fractions, keeping it in range. */
-export function nudgeAssignment(a, dx, dy) {
-  a.ox = (a.ox || 0) + dx;
-  a.oy = (a.oy || 0) + dy;
-  return clampAssignment(a);
-}
-
-/** Builds a tidy download name from the cover title and export size. */
-export function exportFileName(title, w, h) {
-  const slug = title.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'cover';
-  return `vice-cover-${slug}-${w}x${h}.png`;
-}
-
-/** Panel rectangles in pixels for a layout on a cover of width w and height h. */
-export function panelRects(layoutId, w, h) {
-  return LAYOUTS[layoutId].map((p) => ({
-    name: p.name,
-    x: p.rect[0] * w,
-    y: p.rect[1] * h,
-    w: p.rect[2] * w,
-    h: p.rect[3] * h,
+export function defaultPanels(layout) {
+  const count = LAYOUTS[layout].slots.length;
+  const order = [0, 1, 2, 0];
+  return Array.from({ length: count }, (_, i) => ({
+    photo: order[i % order.length],
+    zoom: 1,
+    x: 0,
+    y: 0,
   }));
 }
 
-/** Finds which panel (index, or -1) the point (px, py) falls in. */
-export function panelAt(layoutId, w, h, px, py) {
-  return panelRects(layoutId, w, h).findIndex(
-    (r) => px >= r.x && px < r.x + r.w && py >= r.y && py < r.y + r.h,
-  );
+export function defaultState() {
+  return {
+    layout: 'hero',
+    grade: 'sunset',
+    title: 'SUNSET HEIST',
+    subtitle: 'VICE CITY • 2026',
+    photos: [],
+    panels: defaultPanels('hero'),
+  };
 }
 
-/** Draws one photo into a panel rect, cover-fit, with zoom and pan offsets. */
-function drawPanelPhoto(ctx, img, rect, zoom, ox, oy) {
-  const gap = PANEL_GAP * Math.max(rect.w, rect.h) * 2;
-  const x = rect.x + gap / 2, y = rect.y + gap / 2;
-  const w = rect.w - gap, h = rect.h - gap;
+// Keep a panel's crop inside what the photo can show: zoom 1–2.5, pan ±0.5 of the rect.
+export function clampPanel(panel) {
+  const zoom = Math.max(1, Math.min(2.5, panel.zoom || 1));
+  const x = Math.max(-0.5, Math.min(0.5, panel.x || 0));
+  const y = Math.max(-0.5, Math.min(0.5, panel.y || 0));
+  return { ...panel, zoom, x, y };
+}
+
+// Nudge a panel by (dx, dy) fractions of its rect, then clamp the result.
+export function nudgePanel(panel, dx, dy) {
+  return clampPanel({ ...panel, x: (panel.x || 0) + dx, y: (panel.y || 0) + dy });
+}
+
+// Cover-fit: draw img into rect, scaled to cover, then zoomed and panned by (x, y)
+// fractions of the rect size. Pan is clamped so the image never leaves a gap.
+function drawPanelImage(ctx, img, rect, panel) {
+  const clamped = clampPanel(panel);
+  const iw = img.naturalWidth || img.width;
+  const ih = img.naturalHeight || img.height;
+  if (!iw || !ih) return;
+  const base = Math.max(rect.w / iw, rect.h / ih);
+  const scale = base * clamped.zoom;
+  const dw = iw * scale;
+  const dh = ih * scale;
+  const maxX = Math.max(0, (dw - rect.w) / 2);
+  const maxY = Math.max(0, (dh - rect.h) / 2);
+  const px = Math.max(-maxX, Math.min(maxX, clamped.x * rect.w));
+  const py = Math.max(-maxY, Math.min(maxY, clamped.y * rect.h));
+  const dx = rect.x + (rect.w - dw) / 2 + px;
+  const dy = rect.y + (rect.h - dh) / 2 + py;
+  ctx.drawImage(img, dx, dy, dw, dh);
+}
+
+function paintGrade(ctx, w, h, grade) {
+  const g = ctx.createLinearGradient(0, 0, w, h);
+  grade.stops.forEach((stop, i) => g.addColorStop(i / (grade.stops.length - 1), stop));
   ctx.save();
-  ctx.beginPath();
-  ctx.rect(x, y, w, h);
-  ctx.clip();
-  const base = Math.max(w / img.naturalWidth, h / img.naturalHeight);
-  const s = base * zoom;
-  const pw = img.naturalWidth * s;
-  const ph = img.naturalHeight * s;
-  const cx = x + w / 2 + ox * w;
-  const cy = y + h / 2 + oy * h;
-  ctx.drawImage(img, cx - pw / 2, cy - ph / 2, pw, ph);
+  ctx.globalCompositeOperation = grade.blend;
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, w, h);
   ctx.restore();
+  const vig = ctx.createRadialGradient(w / 2, h / 2, Math.min(w, h) * 0.35, w / 2, h / 2, Math.max(w, h) * 0.75);
+  vig.addColorStop(0, 'rgba(0,0,0,0)');
+  vig.addColorStop(1, 'rgba(0,0,0,0.38)');
+  ctx.fillStyle = vig;
+  ctx.fillRect(0, 0, w, h);
 }
 
-/** Draws the empty-panel placeholder where a panel has no photo yet. */
-function drawEmptyPanel(ctx, rect, grade, label) {
-  const gap = PANEL_GAP * Math.max(rect.w, rect.h) * 2;
-  const x = rect.x + gap / 2, y = rect.y + gap / 2;
-  const w = rect.w - gap, h = rect.h - gap;
-  const wash = ctx.createLinearGradient(x, y, x + w, y + h);
-  wash.addColorStop(0, grade.dark);
-  wash.addColorStop(1, '#12081c');
-  ctx.fillStyle = wash;
-  ctx.fillRect(x, y, w, h);
-  ctx.strokeStyle = 'rgba(255,255,255,0.25)';
-  ctx.setLineDash([Math.max(6, w * 0.02), Math.max(6, w * 0.02)]);
-  ctx.lineWidth = Math.max(2, w * 0.006);
-  ctx.strokeRect(x + ctx.lineWidth, y + ctx.lineWidth, w - 2 * ctx.lineWidth, h - 2 * ctx.lineWidth);
-  ctx.setLineDash([]);
-  ctx.fillStyle = 'rgba(255,255,255,0.75)';
-  ctx.font = `bold ${Math.max(13, w * 0.055)}px sans-serif`;
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText(label, x + w / 2, y + h / 2);
+function paintCaption(ctx, w, h, state, grade) {
+  const bandH = Math.round(h * 0.2);
+  const bandY = h - bandH;
+  const band = ctx.createLinearGradient(0, bandY, 0, h);
+  band.addColorStop(0, 'rgba(0,0,0,0)');
+  band.addColorStop(0.35, grade.band);
+  band.addColorStop(1, grade.band);
+  ctx.fillStyle = band;
+  ctx.fillRect(0, bandY, w, bandH);
+  const pad = Math.round(w * 0.045);
+  const titleSize = Math.round(Math.min(w * 0.085, bandH * 0.52));
   ctx.textBaseline = 'alphabetic';
+  ctx.fillStyle = grade.caption;
+  ctx.strokeStyle = grade.captionEdge;
+  ctx.lineWidth = Math.max(2, titleSize * 0.09);
+  ctx.lineJoin = 'round';
+  ctx.font = `900 ${titleSize}px "Arial Black", "Archivo Black", Impact, sans-serif`;
+  const titleY = bandY + bandH * 0.58;
+  ctx.strokeText(state.title, pad, titleY);
+  ctx.fillText(state.title, pad, titleY);
+  const subSize = Math.round(titleSize * 0.34);
+  ctx.font = `700 ${subSize}px "Avenir Next", "Segoe UI", system-ui, sans-serif`;
+  ctx.fillStyle = 'rgba(255,255,255,0.92)';
+  ctx.strokeStyle = 'rgba(0,0,0,0.55)';
+  ctx.lineWidth = Math.max(1, subSize * 0.12);
+  const subY = bandY + bandH * 0.86;
+  const spaced = state.subtitle.split('').join('\u2009');
+  ctx.strokeText(spaced, pad, subY);
+  ctx.fillText(spaced, pad, subY);
 }
 
-/** Fits a one-line title to the cover width, returning the font size to use. */
-function fitTitle(ctx, text, maxWidth, startSize) {
-  let size = startSize;
-  ctx.font = `900 italic ${size}px sans-serif`;
-  while (size > 14 && ctx.measureText(text).width > maxWidth) {
-    size -= 2;
-    ctx.font = `900 italic ${size}px sans-serif`;
-  }
-  return size;
-}
-
-/** Draws the title, subtitle and studio mark over the panels. */
-function drawCaption(ctx, w, h, { title, subtitle, color, position, accent }) {
-  const text = title.trim().toUpperCase();
-  const sub = subtitle.trim();
-  if (!text && !sub) return;
-  const band = position === 'top' ? h * 0.06 : position === 'center' ? h * 0.42 : h * 0.75;
-  const shade = ctx.createLinearGradient(0, band - h * 0.1, 0, band + h * 0.2);
-  shade.addColorStop(0, 'rgba(10, 4, 18, 0)');
-  shade.addColorStop(0.5, 'rgba(10, 4, 18, 0.55)');
-  shade.addColorStop(1, 'rgba(10, 4, 18, 0)');
-  ctx.fillStyle = shade;
-  ctx.fillRect(0, Math.max(0, band - h * 0.1), w, h * 0.3);
-  ctx.textAlign = 'center';
-  let cursor = band;
-  if (text) {
-    const size = fitTitle(ctx, text, w * 0.92, h * 0.115);
-    ctx.font = `900 italic ${size}px sans-serif`;
-    ctx.lineWidth = Math.max(2, size * 0.09);
-    ctx.strokeStyle = 'rgba(12, 4, 20, 0.9)';
-    ctx.lineJoin = 'round';
-    ctx.strokeText(text, w / 2, cursor + size);
-    ctx.fillStyle = color;
-    ctx.shadowColor = 'rgba(0, 0, 0, 0.55)';
-    ctx.shadowBlur = size * 0.18;
-    ctx.fillText(text, w / 2, cursor + size);
-    ctx.shadowBlur = 0;
-    cursor += size * 1.12;
-    // Accent rule under the title.
-    const ruleW = Math.min(w * 0.5, ctx.measureText(text).width * 0.6);
-    ctx.fillStyle = accent;
-    ctx.fillRect((w - ruleW) / 2, cursor + size * 0.08, ruleW, Math.max(3, h * 0.005));
-    cursor += size * 0.22;
-  }
-  if (sub) {
-    const size = Math.max(13, h * 0.028);
-    ctx.font = `700 ${size}px sans-serif`;
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.92)';
-    ctx.fillText(sub.toUpperCase(), w / 2, cursor + size);
-  }
-  // Small original studio mark, top-right corner, clear of the caption.
-  const markSize = Math.max(11, h * 0.016);
-  ctx.font = `800 ${markSize}px sans-serif`;
-  ctx.textAlign = 'right';
-  ctx.fillStyle = 'rgba(255, 255, 255, 0.65)';
-  ctx.fillText('VICE COVER STUDIO', w - w * 0.02, h * 0.032);
-  ctx.textAlign = 'center';
-}
-
-/**
- * Draws the whole cover onto `canvas` at its own size.
- * `state` holds: photos (array of images or null), assignments (per layout, one
- * { photo, zoom, ox, oy } per panel), layout, grade, title, subtitle,
- * titleColor, captionPos, and selectedPanel (index, or -1) to outline.
- */
-export function drawCover(canvas, state) {
+export function drawCover(canvas, state, w, h) {
+  canvas.width = w;
+  canvas.height = h;
   const ctx = canvas.getContext('2d');
-  const { width: w, height: h } = canvas;
-  const grade = GRADES[state.grade] ?? GRADES.sunset;
-  const rects = panelRects(state.layout, w, h);
-  const panels = state.assignments[state.layout] ?? [];
-  ctx.fillStyle = grade.dark;
+  const layout = LAYOUTS[state.layout] || LAYOUTS.hero;
+  const grade = GRADES[state.grade] || GRADES.sunset;
+  ctx.fillStyle = '#0d0a14';
   ctx.fillRect(0, 0, w, h);
-  rects.forEach((rect, i) => {
-    const a = clampAssignment(panels[i] ?? { photo: 0, zoom: 1, ox: 0, oy: 0 });
-    const img = state.photos[a.photo] ?? null;
-    if (img) drawPanelPhoto(ctx, img, rect, a.zoom, a.ox, a.oy);
-    else drawEmptyPanel(ctx, rect, grade, 'ADD A PHOTO');
+  layout.slots.forEach((slot, i) => {
+    const rect = { x: slot.x * w, y: slot.y * h, w: slot.w * w, h: slot.h * h };
+    const panel = state.panels[i] || { photo: 0, zoom: 1, x: 0, y: 0 };
+    const img = state.photos[panel.photo];
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(rect.x, rect.y, rect.w, rect.h);
+    ctx.clip();
+    if (img) {
+      drawPanelImage(ctx, img, rect, panel);
+    } else {
+      const ph = ctx.createLinearGradient(rect.x, rect.y, rect.x + rect.w, rect.y + rect.h);
+      ph.addColorStop(0, '#2a1b4d');
+      ph.addColorStop(1, '#12081f');
+      ctx.fillStyle = ph;
+      ctx.fillRect(rect.x, rect.y, rect.w, rect.h);
+      ctx.fillStyle = 'rgba(255,255,255,0.55)';
+      ctx.font = `700 ${Math.round(Math.min(rect.w, rect.h) * 0.07)}px system-ui, sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.fillText('ADD A PHOTO', rect.x + rect.w / 2, rect.y + rect.h / 2);
+      ctx.textAlign = 'left';
+    }
+    ctx.restore();
   });
-  // Grade wash over the whole sheet, stronger toward the bottom.
-  const wash = ctx.createLinearGradient(0, h * 0.25, 0, h);
-  wash.addColorStop(0, grade.top);
-  wash.addColorStop(1, grade.bottom);
-  ctx.fillStyle = wash;
-  ctx.fillRect(0, 0, w, h);
-  // Bright panel borders.
-  const borderW = Math.max(2, w * 0.004);
-  ctx.strokeStyle = grade.border;
-  ctx.lineWidth = borderW;
-  rects.forEach((rect) => {
-    ctx.strokeRect(rect.x + borderW / 2, rect.y + borderW / 2, rect.w - borderW, rect.h - borderW);
+  // Gutters + keylines between panels.
+  ctx.strokeStyle = 'rgba(5,3,8,0.9)';
+  ctx.lineWidth = Math.max(3, w * 0.006);
+  layout.slots.forEach((slot) => {
+    ctx.strokeRect(slot.x * w, slot.y * h, slot.w * w, slot.h * h);
   });
-  // Selected panel outline, for the editor.
-  if (state.selectedPanel >= 0 && rects[state.selectedPanel]) {
-    const r = rects[state.selectedPanel];
-    ctx.strokeStyle = '#00e5ff';
-    ctx.lineWidth = Math.max(3, w * 0.006);
-    ctx.setLineDash([Math.max(10, w * 0.02), Math.max(8, w * 0.012)]);
-    ctx.strokeRect(r.x + 4, r.y + 4, r.w - 8, r.h - 8);
-    ctx.setLineDash([]);
+  ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+  ctx.lineWidth = Math.max(1, w * 0.0016);
+  layout.slots.forEach((slot) => {
+    ctx.strokeRect(slot.x * w, slot.y * h, slot.w * w, slot.h * h);
+  });
+  paintGrade(ctx, w, h, grade);
+  if (state.title) paintCaption(ctx, w, h, state, grade);
+  return canvas;
+}
+
+export function renderCoverToCanvas(state, w, h) {
+  const canvas = document.createElement('canvas');
+  return drawCover(canvas, state, w, h);
+}
+
+export function slotAt(state, fx, fy) {
+  const layout = LAYOUTS[state.layout] || LAYOUTS.hero;
+  for (let i = layout.slots.length - 1; i >= 0; i--) {
+    const s = layout.slots[i];
+    if (fx >= s.x && fx < s.x + s.w && fy >= s.y && fy < s.y + s.h) return i;
   }
-  drawCaption(ctx, w, h, {
-    title: state.title,
-    subtitle: state.subtitle,
-    color: state.titleColor,
-    position: state.captionPos,
-    accent: grade.accent,
-  });
+  return 0;
+}
+
+// File name for an exported cover: slug of the title plus its pixel size.
+export function coverFileName(title, w, h) {
+  const slug = (title || 'vice-cover').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'vice-cover';
+  return `${slug}-${w}x${h}.png`;
 }
